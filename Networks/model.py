@@ -4,8 +4,79 @@ from torch.autograd import Variable
 from math import sqrt
 from .utils import to_gpu
 from .decoder import Decoder
-from .layers import SpeakerClassifier, SpeakerEncoder, AudioSeq2seq, TextEncoder,  PostNet, MergeNet
+from .layers import SpeakerClassifier, SpeakerEncoder, AudioSeq2seq, \
+    TextEncoder,  PostNet, MergeNet
 
+class S2SVC(nn.Module):
+    def __init__(self, config={}):
+        super(S2SVC, self).__init__()
+        self.text_encoder = TextEncoder(**config.get('text_encoder', {}))
+        self.audio_seq2seq = AudioSeq2seq(**config.get('audio_seq2seq', {}))
+        self.merge_net = MergeNet(**config.get('mergenet', {}))
+        self.speaker_classifier = SpeakerClassifier(**config.get('speaker_classifier', {}))
+        self.speaker_encoder = SpeakerEncoder(**config.get('speaker_encoder', {}))
+        self.decoder = Decoder(**config.get('decoder', {}))
+        self.postnet = PostNet(**config.get('postnet', {}))
+
+        self.pad = config.get('pad_token', 0)
+        self.sos = config.get('sos_token', 1)
+        self.eos = config.get('eos_token', 2)
+        self.unk = config.get('unk_token', 3)
+        self.spemb_input = config.get('spemb_input', False)
+
+    def initialize(self):
+        self.text_encoder.initialize()
+        self.audio_seq2seq.initialize()
+        self.merge_net.initialize()
+        self.speaker_classifier.initialize()
+        self.speaker_encoder.initialize()
+        self.decoder.initialize()
+        self.postnet.initialize()
+
+    def forward(self, text_input, mel_input, text_lengths, mel_lengths, input_text=True):
+        text_emb, text_hidden = self.text_encoder(text_input, text_lengths) # -> [B, max_text_len, hidden_dim]
+        batch_size = text_input.size(0)
+        start_embedding = torch.zeros(batch_size,).type_as(text_input).fill_(self.sos)
+        start_embedding = self.text_encoder.embedding(start_embedding)
+
+        # -> [B, n_speakers], [B, speaker_embedding_dim]
+        speaker_logit_from_mel, speaker_embedding = self.speaker_encoder(mel_input, mel_lengths)
+
+        if self.spemb_input:
+            time_length = mel_input.size(2)
+            audio_input = torch.cat([mel_input,
+                                     speaker_embedding.detach().unsqueeze(2).expand(-1, -1, time_length)], 1)
+        else:
+            audio_input = mel_input
+
+        audio_seq2seq_hidden, audio_seq2seq_logit, audio_seq2seq_alignments = self.audio_seq2seq(
+                audio_input, mel_lengths, text_emb.transpose(1, 2), start_embedding)
+        audio_seq2seq_hidden = audio_seq2seq_hidden[:,:-1, :] # -> [B, text_len, hidden_dim]
+        speaker_logit_from_mel_hidden = self.speaker_classifier(audio_seq2seq_hidden) # -> [B, text_len, n_speakers]
+        if input_text:
+            hidden = self.merge_net(text_hidden, text_lengths)
+        else:
+            hidden = self.merge_net(audio_seq2seq_hidden, text_lengths)
+
+        hidden_length = hidden.size(1)
+        hidden = torch.cat([hidden, speaker_embedding.detach().unsqueeze(1).expand(-1, hidden_length, -1)], -1)
+        predicted_mel, predicted_stop, alignments = self.decoder(hidden, mel_input, text_lengths)
+        post_output = self.postnet(predicted_mel)
+
+        outputs = {
+            "predict_mel": predicted_mel,
+            "post_output": post_output,
+            "predicted_stop": predicted_stop,
+            "alignments": alignments,
+            "text_hidden": text_hidden,
+            "audio_seq2seq_hidden": audio_seq2seq_hidden,
+            "audio_seq2seq_logit": audio_seq2seq_logit,
+            "audio_seq2seq_alignments": audio_seq2seq_alignments,
+            "speaker_logit_from_mel": speaker_logit_from_mel,
+            "speaker_logit_from_mel_hidde": speaker_logit_from_mel_hidden,
+        }
+
+        return outputs
 
 class Parrot(nn.Module):
     def __init__(self, hparams):
