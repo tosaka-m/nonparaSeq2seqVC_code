@@ -23,6 +23,7 @@ class S2SVC(nn.Module):
         self.eos = config.get('eos_token', 2)
         self.unk = config.get('unk_token', 3)
         self.spemb_input = config.get('spemb_input', False)
+        self.initialize()
 
     def initialize(self):
         self.text_encoder.initialize()
@@ -73,7 +74,7 @@ class S2SVC(nn.Module):
             "audio_seq2seq_logit": audio_seq2seq_logit,
             "audio_seq2seq_alignments": audio_seq2seq_alignments,
             "speaker_logit_from_mel": speaker_logit_from_mel,
-            "speaker_logit_from_mel_hidde": speaker_logit_from_mel_hidden,
+            "speaker_logit_from_mel_hidden": speaker_logit_from_mel_hidden,
         }
 
         return outputs

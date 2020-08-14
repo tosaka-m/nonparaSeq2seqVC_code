@@ -7,7 +7,7 @@ train_config:
   cudnn_benchmark: False
   training_list: 'Data/train_list.txt'
   validation_list: 'Data/val_list.txt'
-
+  device: 'cpu'
 ################################
 # Model Parameters             #
 ################################
