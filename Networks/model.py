@@ -7,9 +7,9 @@ from .decoder import Decoder
 from .layers import SpeakerClassifier, SpeakerEncoder, AudioSeq2seq, \
     TextEncoder,  PostNet, MergeNet
 
-class S2SVC(nn.Module):
+class VCS2S(nn.Module):
     def __init__(self, config={}):
-        super(S2SVC, self).__init__()
+        super(VCS2S, self).__init__()
         self.text_encoder = TextEncoder(**config.get('text_encoder', {}))
         self.audio_seq2seq = AudioSeq2seq(**config.get('audio_seq2seq', {}))
         self.merge_net = MergeNet(**config.get('mergenet', {}))
@@ -23,18 +23,8 @@ class S2SVC(nn.Module):
         self.eos = config.get('eos_token', 2)
         self.unk = config.get('unk_token', 3)
         self.spemb_input = config.get('spemb_input', False)
-        self.initialize()
 
-    def initialize(self):
-        self.text_encoder.initialize()
-        self.audio_seq2seq.initialize()
-        self.merge_net.initialize()
-        self.speaker_classifier.initialize()
-        self.speaker_encoder.initialize()
-        self.decoder.initialize()
-        self.postnet.initialize()
-
-    def forward(self, text_input, mel_input, text_lengths, mel_lengths, input_text=True):
+    def forward(self, text_input, mel_input, text_lengths, mel_lengths, auto_encoding=True):
         text_emb, text_hidden = self.text_encoder(text_input, text_lengths) # -> [B, max_text_len, hidden_dim]
         batch_size = text_input.size(0)
         start_embedding = torch.zeros(batch_size,).type_as(text_input).fill_(self.sos)
@@ -54,7 +44,7 @@ class S2SVC(nn.Module):
                 audio_input, mel_lengths, text_emb.transpose(1, 2), start_embedding)
         audio_seq2seq_hidden = audio_seq2seq_hidden[:,:-1, :] # -> [B, text_len, hidden_dim]
         speaker_logit_from_mel_hidden = self.speaker_classifier(audio_seq2seq_hidden) # -> [B, text_len, n_speakers]
-        if input_text:
+        if auto_encoding:
             hidden = self.merge_net(text_hidden, text_lengths)
         else:
             hidden = self.merge_net(audio_seq2seq_hidden, text_lengths)

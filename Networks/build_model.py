@@ -1,5 +1,5 @@
-from .model import S2SVC
+from .model import VCS2S
 
 def build_model(model_params={}):
-    model = S2SVC(model_params)
+    model = VCS2S(model_params)
     return model

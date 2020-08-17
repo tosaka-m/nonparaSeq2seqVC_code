@@ -39,20 +39,20 @@ class ParrotLoss(nn.Module):
 
         padded = torch.tensor(text_target.data.new(B,1).zero_())
         text_target = torch.cat((text_target, padded), dim=-1)
-        
+
         # adding the ending token for target
         for bid in range(B):
             text_target[bid, text_lengths[bid].item()] = self.eos
 
         return text_target, mel_target, spc_target, speaker_target, stop_target
-    
+
     def forward(self, model_outputs, targets, input_text, eps=1e-5):
 
         '''
         predicted_mel [batch_size, mel_bins, T]
         predicted_stop [batch_size, T/r]
-        alignment 
-            when input_text==True [batch_size, T/r, max_text_len] 
+        alignment
+            when input_text==True [batch_size, T/r, max_text_len]
             when input_text==False [batch_size, T/r, T/r]
         text_hidden [B, max_text_len, hidden_dim]
         mel_hidden [B, max_text_len, hidden_dim]
@@ -75,7 +75,7 @@ class ParrotLoss(nn.Module):
         spc_mask = get_mask_from_lengths(mel_lengths, mel_target.size(2)).unsqueeze(1).expand(-1, spc_target.size(1), -1).float()
 
         mel_step_lengths = torch.ceil(mel_lengths.float() / self.n_frames_per_step).long()
-        stop_mask = get_mask_from_lengths(mel_step_lengths, 
+        stop_mask = get_mask_from_lengths(mel_step_lengths,
                                     int(mel_target.size(2)/self.n_frames_per_step)).float() # [B, T/r]
         text_mask = get_mask_from_lengths(text_lengths).float()
         text_mask_plus_one = get_mask_from_lengths(text_lengths + 1).float()
@@ -87,7 +87,7 @@ class ParrotLoss(nn.Module):
             recon_loss_post = (self.L1Loss(post_output, spc_target) * spc_mask).sum() / spc_mask.sum()
         else:
             recon_loss_post = (self.L1Loss(post_output, mel_target) * mel_mask).sum() / torch.sum(mel_mask)
-        
+
         stop_loss = torch.sum(self.BCEWithLogitsLoss(predicted_stop, stop_target) * stop_mask) / torch.sum(stop_mask)
 
 
@@ -107,9 +107,9 @@ class ParrotLoss(nn.Module):
             distance_matrix_yy = distance_matrix_yy.unsqueeze(1) #[batch_size, 1, text_len]
 
             #[batch_size, text_len, text_len]
-            distance_matrix_xy = torch.bmm(text_hidden_normed, torch.transpose(mel_hidden_normed, 1, 2)) 
+            distance_matrix_xy = torch.bmm(text_hidden_normed, torch.transpose(mel_hidden_normed, 1, 2))
             distance_matrix = distance_matrix_xx + distance_matrix_yy - 2 * distance_matrix_xy
-            
+
             TTEXT = distance_matrix.size(1)
             hard_alignments = torch.eye(TTEXT).cuda()
             contrast_loss = hard_alignments * distance_matrix + \
@@ -151,19 +151,19 @@ class ParrotLoss(nn.Module):
             speaker_adversial_loss = - speaker_classification_loss
         else:
             speaker_adversial_loss = torch.sum(loss * mask) / torch.sum(mask)
-        
+
         loss_list = [recon_loss, recon_loss_post,  stop_loss,
                 contrast_loss, speaker_encoder_loss, speaker_classification_loss,
                 text_classification_loss, speaker_adversial_loss]
-            
+
         acc_list = [speaker_encoder_acc, speaker_classification_acc, text_classification_acc]
-        
-        
+
+
         combined_loss1 = recon_loss + recon_loss_post + stop_loss + self.contr_w * contrast_loss + \
             self.spenc_w * speaker_encoder_loss +  self.texcl_w * text_classification_loss + \
             self.spadv_w * speaker_adversial_loss
 
         combined_loss2 = self.spcla_w * speaker_classification_loss
-        
+
         return loss_list, acc_list, combined_loss1, combined_loss2
 

@@ -150,11 +150,11 @@ class VCS2STrainer(Trainer):
         for train_steps_per_epoch, batch in enumerate(tqdm(self.train_dataloader, desc="[train]"), 1):
             self.optimizer.zero_grad()
             batch = [b.to(self.device) for b in batch]
-            text, text_lengths, mel_target, mel_target_lengths, speaker_ids, _ = batch
+            text, text_lengths, mel_target, mel_target_lengths, speaker_ids = batch
             output = self.model(text, mel_target, text_lengths, mel_target_lengths,
                                 auto_encoding=(train_steps_per_epoch % 2 == 0))
 
-            losses = self.critic(output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
+            losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
             loss = 0
             for key, value in losses.items():
                 loss += value
@@ -170,9 +170,21 @@ class VCS2STrainer(Trainer):
         eval_losses = defaultdict(list)
         eval_images = defaultdict(list)
         for eval_steps_per_epoch, batch in enumerate(tqdm(self.val_dataloader, desc="[eval]"), 1):
+            batch = [b.to(self.device) for b in batch]
+            text, text_lengths, mel_target, mel_target_lengths, speaker_ids = batch
+            output = self.model(text, mel_target, text_lengths, mel_target_lengths,
+                                auto_encoding=(eval_steps_per_epoch % 2 == 0))
+
+            losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
+            loss = 0
+            for key, value in losses.items():
+                loss += value
+                eval_losses['eval/%s' % key].append(value.item())
+
             if eval_steps_per_epoch == 1:
-                eval_images["eval/image"].append(self.get_image(
-                    [attn[0, 0].cpu().numpy(), mel_target[0].cpu().numpy()]))
+                eval_images["eval/image"].append(
+                    self.get_image(
+                        [output['post_output'][0].cpu().numpy(), mel_target[0].cpu().numpy()]))
 
         eval_losses = {key: np.mean(value) for key, value in eval_losses.items()}
         eval_losses.update(eval_images)

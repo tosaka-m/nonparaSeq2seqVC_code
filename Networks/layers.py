@@ -139,16 +139,14 @@ class MergeNet(nn.Module):
         '''
         x [B, T, dim]
         '''
-        #x_sorted, sorted_lengths, initial_index = sort_batch(x, input_lengths)
-        assert(torch.all((input_lengths[:-1] - input_lengths[1:])>=0))
-
+        x_sorted, sorted_lengths, initial_index = sort_batch(x, input_lengths)
         x = nn.utils.rnn.pack_padded_sequence(
-            x, input_lengths.cpu().numpy(), batch_first=True)
+            x_sorted, sorted_lengths.cpu().numpy(), batch_first=True)
 
         self.lstm.flatten_parameters()
         outputs, _ = self.lstm(x)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
-        #outputs = outputs[initial_index]
+        outputs = outputs[initial_index]
 
         return outputs
 
@@ -564,14 +562,13 @@ class TextEncoder(nn.Module):
         # -> [batch_size, T, channel]
         x = x.transpose(1, 2)
 
-        #x_sorted, sorted_lengths, initial_index = sort_batch(x, input_lengths)
-        assert(torch.all((input_lengths[:-1] - input_lengths[1:])>=0))
+        x_sorted, sorted_lengths, initial_index = sort_batch(x, input_lengths)
         # pytorch tensor are not reversible, hence the conversion
         #input_lengths = input_lengths.cpu().numpy()
         #sorted_lengths = sorted_lengths.cpu().numpy()
 
         x = nn.utils.rnn.pack_padded_sequence(
-            x, input_lengths.cpu().numpy(), batch_first=True)
+            x_sorted, sorted_lengths.cpu().numpy(), batch_first=True)
 
         self.lstm.flatten_parameters()
         outputs, _ = self.lstm(x)

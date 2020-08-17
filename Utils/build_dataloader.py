@@ -47,7 +47,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         )
         self.sr = sr
         self.mean, self.std = -4, 4
-        self.std_f0 = 5
+        #self.std_f0 = 5
         logger.debug('sr: %d\nn_fft: %d\nhop_length: %d\nwin_length: %d' % (sr, n_fft, hop_length, win_length))
 
         self.data_augmentation = data_augmentation and (not validation)
@@ -55,38 +55,29 @@ class FilePathDataset(torch.utils.data.Dataset):
             self.extend_data_list = [d for d in self.data_list if len(d[1]) < 60]
             self.mel_zero_pad = (torch.log(1e-4 + torch.zeros((n_mels, int(sr*0.6 // hop_length))).float()) - self.mean) / self.std
             self.wave_zero_pad = torch.zeros((int(sr*0.6), )).float()
-            self.f0_zero_pad = torch.zeros((self.mel_zero_pad.shape[1], )).float()
+            #self.f0_zero_pad = torch.zeros((self.mel_zero_pad.shape[1], )).float()
             self.text_zero_pad = torch.LongTensor(self.text_cleaner(' '))
     def __len__(self):
         return len(self.data_list)
 
     def __getitem__(self, idx):
         data = self.data_list[idx]
-        wave_tensor, mel_tensor, text_tensor, f0_tensor, speaker_id = self._load_tensor(data)
-        if self.data_augmentation and mel_tensor.shape[1] < 600 and np.random.random() < 0.8:
-            ext_data = random.choice(self.extend_data_list)
-            ext_wave_tensor, ext_mel_tensor, ext_text_tensor, ext_f0_tensor, ext_speaker_id\
-                = self._load_tensor(ext_data)
-            wave_tensor = self._concat_data(wave_tensor, ext_wave_tensor, data_type='wave')
-            mel_tensor = self._concat_data(mel_tensor, ext_mel_tensor, data_type='mel')
-            text_tensor = self._concat_data(text_tensor, ext_text_tensor, data_type='text')
-            f0_tensor = self._concat_data(f0_tensor, ext_f0_tensor, data_type='f0')
-
-        return wave_tensor, mel_tensor, text_tensor, f0_tensor, speaker_id, data[0]
+        wave_tensor, mel_tensor, text_tensor, speaker_id = self._load_tensor(data)
+        return wave_tensor, mel_tensor, text_tensor,  speaker_id, data[0]
 
     def _load_tensor(self, data):
         wave_path, text, speaker_id = data
         speaker_id = int(speaker_id)
         waves = torch.load(wave_path, map_location='cpu')
-        wave, mel, f0 = waves
+        wave, mel, _ = waves
 
         text = torch.LongTensor(self.text_cleaner(text))
         mel = (torch.log(1e-5 + mel) - self.mean) / self.std
         mel_len = mel.size(1) - mel.size(1) % 2
         mel = mel[:, :mel_len]
-        f0 = f0[:mel_len]
-        f0 = torch.log(1 + f0) / self.std_f0
-        return wave, mel, text, f0, speaker_id
+        # f0 = f0[:mel_len]
+        # f0 = torch.log(1 + f0) / self.std_f0
+        return wave, mel, text, speaker_id
 
     def _concat_data(self, data1, data2, data_type='wave'):
 
@@ -130,10 +121,10 @@ class Collater(object):
         texts = torch.zeros((batch_size, max_text_length)).long()
         input_lengths = torch.zeros(batch_size).long()
         output_lengths = torch.zeros(batch_size).long()
-        f0s = torch.zeros((batch_size, max_mel_length)).float()
+        # f0s = torch.zeros((batch_size, max_mel_length)).float()
         speaker_ids = torch.zeros((batch_size)).long()
         paths = ['' for _ in range(batch_size)]
-        for bid, (_, mel, text, f0, speaker_id, path) in enumerate(batch):
+        for bid, (_, mel, text, speaker_id, path) in enumerate(batch):
             mel_size = mel.size(1)
             text_size = text.size(0)
             mels[bid, :, :mel_size] = mel
@@ -141,14 +132,14 @@ class Collater(object):
             input_lengths[bid] = text_size
             output_lengths[bid] = mel_size
             speaker_ids[bid] = speaker_id
-            f0s[bid, :mel_size] = f0
+            #f0s[bid, :mel_size] = f0
             paths[bid] = path
 
         if self.return_wave:
             waves = [b[0] for b in batch]
-            return texts, input_lengths, mels, output_lengths, f0s, speaker_ids, paths, waves
+            return texts, input_lengths, mels, output_lengths, speaker_ids, waves
 
-        return texts, input_lengths, mels, output_lengths, f0s, speaker_ids, paths
+        return texts, input_lengths, mels, output_lengths, speaker_ids
 
 def build_dataloader(path_list,
                      validation=False,

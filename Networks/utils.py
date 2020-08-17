@@ -57,6 +57,7 @@ def test_loss():
 
 
 def initialize(model):
+    print("initialize", model.__class__.__name__)
     initrange = 0.01
     bias_initrange = 0.001
     parameters = model.parameters()

@@ -18,29 +18,46 @@ def build_critic(critic_params={}):
         "ga": GuidedAttentionLoss(alpha=1000),
         "ctc": torch.nn.CTCLoss(),
         "mle": MLE(**critic_params.get('mle', {})),
-        "vcs2s": VCS2SLoss()
+        "vcs2s": VCS2SLoss(**critic_params.get('vcs2s', {}))
     }
     return critic
 
 class VCS2SLoss(nn.Module):
-    def __init__(self):
+    def __init__(self,
+                 contra_w=30.,
+                 text_clf_w=1.,
+                 spk_enc_w=1.,
+                 spk_clf_w=0.1,
+                 spk_adv_w=20.,
+    ):
         super(VCS2SLoss, self).__init__()
         self.masked_mse = MaskedMSELoss()
+        self.masked_l1 = MaskedL1Loss()
         self.masked_bce = MaskedBCEWithLogitsLoss()
         self.masked_ce = MaskedCrossEntropyLoss()
         self.ce = nn.CrossEntropyLoss(ignore_index=-1)
-        self.constractive = ConstrastiveLoss()
+        self.contrastive = ContrastiveLoss()
+
+        self.contra_w = contra_w
+        self.text_clf_w = text_clf_w
+        self.spk_enc_w = spk_enc_w
+        self.spk_clf_w = spk_clf_w
+        self.spk_adv_w = spk_adv_w
 
     def forward(self, output, text_input, text_input_lengths, mel_target, mel_target_lengths, speaker_ids):
+        device = text_input.device
         text_mask = self.get_mask_from_lengths(text_input_lengths)
         mel_mask = self.get_mask_from_lengths(mel_target_lengths)
 
         # taco losses
         B = text_input.size(0)
-        recon_loss = self.masked_mse(output['predict_mel'], mel_target, ~mel_mask.unsqueeze(1))
-        recon_post_loss = self.masked_mse(output['post_output'], mel_target, ~mel_mask.unsqueeze(1))
+        recon_loss = self.masked_l1(output['predict_mel'], mel_target, ~mel_mask.unsqueeze(1))
+        recon_post_loss = self.masked_l1(output['post_output'], mel_target, ~mel_mask.unsqueeze(1))
+        stop_label = torch.zeros(B, mel_mask.size(1)//2).to(device)
+        stop_label.scatter_(1, (mel_target_lengths // 2 -1).unsqueeze(1), 1)
+        stop_label.scatter_(1, ((mel_target_lengths-1) // 2).unsqueeze(1), 1)
         stop_loss = self.masked_bce(output['predicted_stop'],
-                                    torch.zeros(B, mel_mask.size(1)//2), ~mel_mask.reshape(B, -1, 2)[:,:,0])
+                                    stop_label, ~mel_mask.reshape(B, -1, 2)[:,:,0])
 
         # spk losses
         spk_logit = output['speaker_logit_from_mel']
@@ -52,28 +69,34 @@ class VCS2SLoss(nn.Module):
         spk_clf_loss = self.ce(spk_logit_flatten, spk_target_flatten)
 
         n_spk = spk_logit.size(1)
-        flatten_mask =  text_mask.unsqueeze(2).expand(-1,-1, n_spk).reshape(-1, n_spk)
-        flatten_target = (1/n_spk) * torch.ones_like(spk_logit_flatten)
+        expand_mask =  text_mask.unsqueeze(1).expand(-1, n_spk, -1)
+        uniform_target = (1/n_spk) * torch.ones_like(spk_logit_hidden)
         spk_adv_loss = self.masked_mse(
-            spk_logit_flatten.softmax(dim=1).unsqueeze(1),
-            flatten_target.unsqueeze(1),
-            flatten_mask.unsqueeze(1))
+            spk_logit_hidden.transpose(1, 2).softmax(dim=1),
+            uniform_target.transpose(1, 2),
+            ~expand_mask)
 
         # text losses
         text_logit = output['audio_seq2seq_logit'][:, :-1]
         text_logit_flatten = text_logit.reshape(-1, text_logit.size(2))
         text_target_flatten = text_input.reshape(-1)
         text_clf_loss = self.masked_ce(text_logit_flatten, text_target_flatten, ~text_mask.reshape(-1))
+
+        # contrastive loss
+        text_hidden = output['text_hidden']
+        mel_hidden = output['audio_seq2seq_hidden']
+        contra_loss = self.contrastive(text_hidden, text_mask, mel_hidden, text_mask)
+
         return {
             "recon_loss": recon_loss,
             "recon_post_loss": recon_post_loss,
             "stop_loss": stop_loss,
-            "spk_enc_loss": spk_enc_loss,
-            "spk_clf_loss": spk_clf_loss,
-            "spk_adv_loss": spk_adv_loss,
-            "text_clf_loss": text_clf_loss,
+            "spk_enc_loss": spk_enc_loss * self.spk_enc_w,
+            "spk_clf_loss": spk_clf_loss * self.spk_clf_w,
+            "spk_adv_loss": spk_adv_loss * self.spk_adv_w,
+            "text_clf_loss": text_clf_loss * self.text_clf_w,
+            "contra_loss": contra_loss * self.contra_w
         }
-
 
     def get_mask_from_lengths(self, lengths, max_len=None):
         if max_len is None:
@@ -120,6 +143,28 @@ class MaskedMSELoss(nn.Module):
             mean_sq_error = getattr(mean_sq_error, self.reduce)()
         return mean_sq_error
 
+class MaskedL1Loss(nn.Module):
+    def __init__(self, reduce='mean'):
+        super(MaskedL1Loss, self).__init__()
+        self.reduce = reduce
+
+    def forward(self, x, y, mask):
+        """
+        x.shape = (B, H, L)
+        y.shape = (B, H, L)
+        mask.shape = (B, 1, L), True index will be ignored
+        """
+        assert(x.shape == y.shape)
+        mask = mask.type_as(x)
+        shape = x.shape
+        lengths = (1 - mask).sum(dim=tuple(range(1, len(shape)))).detach()
+        sq_error = (x * (1 - mask) - y * (1 - mask)).abs().mean(dim=-1).sum(dim=1)
+        mean_sq_error = sq_error / lengths
+        if self.reduce is not None:
+            mean_sq_error = getattr(mean_sq_error, self.reduce)()
+        return mean_sq_error
+
+
 class MaskedBCEWithLogitsLoss(nn.Module):
     def __init__(self, reduce='mean'):
         super(MaskedBCEWithLogitsLoss, self).__init__()
@@ -163,11 +208,11 @@ class MaskedCrossEntropyLoss(nn.Module):
         return ce_loss
 
 
-class ConstrastiveLoss(nn.Module):
+class ContrastiveLoss(nn.Module):
     def __init__(self):
-        super(ConstrastiveLoss, self).__init__()
+        super(ContrastiveLoss, self).__init__()
 
-    def forward(self, x, y, x_mask, y_mask):
+    def forward(self, x, x_mask, y, y_mask):
         """
         x.shape = (B, Tx, H)
         y.shape = (B, Ty, H)
@@ -177,11 +222,11 @@ class ConstrastiveLoss(nn.Module):
         norm_x = x / x.norm(dim=2, keepdim=True)
         norm_y = y / y.norm(dim=2, keepdim=True)
         distance_matrix = 2 - 2 * torch.bmm(norm_x, norm_y.transpose(1, 2))
-        constrast_mask = x_mask.unsqueeze(1) & y_mask.unsqueeze(2)
-        hard_alignments = torch.eye(distance_matrix.size(1))
-        constrast_loss = hard_alignments * distance_matrix + (1 - hard_alignments) * torch.max(1 - distance_matrix, torch.zeros_like(distance_matrix))
-        constrast_loss = (constrast_loss * constrast_mask).sum() / constrast_mask.sum()
-        return constrast_loss
+        contrast_mask = x_mask.unsqueeze(1) & y_mask.unsqueeze(2)
+        hard_alignments = torch.eye(distance_matrix.size(1)).to(x.device)
+        contrast_loss = hard_alignments * distance_matrix + (1 - hard_alignments) * torch.max(1 - distance_matrix, torch.zeros_like(distance_matrix))
+        contrast_loss = (contrast_loss * contrast_mask).sum() / contrast_mask.sum()
+        return contrast_loss
 
 class GuidedAttentionLoss(torch.nn.Module):
 

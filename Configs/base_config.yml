@@ -1,13 +1,21 @@
 train_config:
+  log_dir: 'logs/test'
   epochs: 200
   iters_per_checkpoint: 1000
   seed: 1234
   distributed_run: False
   cudnn_enabled: True
   cudnn_benchmark: False
-  training_list: 'Data/train_list.txt'
-  validation_list: 'Data/val_list.txt'
-  device: 'cpu'
+  train_data: 'Data/train_list.txt'
+  val_data: 'Data/val_list.txt'
+  device: 'cuda:0'
+  batch_size: 45
+  save_freq: 10
+
+optimizer_params:
+  lr: 1e-3
+  weight_decay: 1e-5
+
 ################################
 # Model Parameters             #
 ################################
