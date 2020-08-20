@@ -69,6 +69,61 @@ class VCS2S(nn.Module):
 
         return outputs
 
+    def inference(self,
+                  text_input=None, text_lengths=None,
+                  mel_source=None, mel_source_lengths=None,
+                  mel_reference=None, beam_width=10):
+        '''
+        decode the audio sequence from input
+        inputs x
+        input_text True or False
+        mel_reference [1, mel_bins, T]
+        '''
+        speaker_id, speaker_embedding = self.speaker_encoder.inference(mel_reference)
+
+        assert((text_input is not None) or (mel_source is not None))
+        if text_input is not None:
+            batch_size = text_input.size(0)
+            assert(batch_size == 1)
+            text_input_embedded, text_hidden = self.text_encoder.inference(text_input)
+            hidden = self.merge_net.inference(text_hidden)
+            options = (text_hidden, )
+        elif mel_reference is not None:
+            #-> [B, text_len+1, hidden_dim] [B, text_len+1, n_symbols] [B, text_len+1, T/r]
+            start_embedding = torch.LongTensor([self.sos_token]).to(mel_reference.device)
+            start_embedding = self.text_encoder.embedding(start_embedding) # [1, embedding_dim]
+
+            if self.spemb_input:
+                time_length = mel_source.size(2)
+                audio_input = torch.cat([mel_source,
+                                         speaker_embedding.detach().unsqueeze(2).expand(-1, -1, time_length)], 1)
+            else:
+                audio_input = mel_source
+                audio_seq2seq_hidden, audio_seq2seq_hids, audio_seq2seq_alignments \
+                    = self.audio_seq2seq.inference_beam(
+                        audio_input, start_embedding, self.text_encoder.embedding, beam_width=beam_width)
+                audio_seq2seq_hidden = audio_seq2seq_hidden[:,:-1, :] # -> [B, text_len, hidden_dim]
+            options = (audio_seq2seq_hidden, audio_seq2seq_hids, audio_seq2seq_alignments)
+
+            hidden = self.merge_net.inference(audio_seq2seq_hidden)
+
+        L = hidden.size(1)
+        hidden = torch.cat([hidden, speaker_embedding.detach().unsqueeze(1).expand(-1, L, -1)], -1)
+        predicted_mel, predicted_stop, alignments = self.decoder.inference(hidden)
+
+        post_output = self.postnet(predicted_mel)
+
+        return {
+            "predict_mel": predicted_mel,
+            "post_output": post_output,
+            "predict_stop": predicted_stop,
+            "alignment": alignments,
+            "predict_speaker_id": speaker_id,
+            "options": options
+            }
+
+
+
 class Parrot(nn.Module):
     def __init__(self, hparams):
         super(Parrot, self).__init__()

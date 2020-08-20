@@ -285,7 +285,7 @@ class AudioSeq2seq(nn.Module):
 
         self.project_to_n_symbols= LinearNorm(encoder_embedding_dim,
             n_symbols + 1) # plus the <eos>
-        self.eos = n_symbols
+        self.eos = 2
         self.activation = hidden_activation
         self.max_len = 100
         initialize(self)
@@ -580,6 +580,8 @@ class TextEncoder(nn.Module):
         return emb, outputs
 
     def inference(self, x):
+        emb = self.embedding(x)
+        x = emb.transpose(1, 2)
         for conv in self.convolutions:
             x = F.dropout(F.relu(conv(x)), self.dropout, self.training)
 
@@ -588,7 +590,7 @@ class TextEncoder(nn.Module):
         outputs, _ = self.lstm(x)
         outputs = self.projection(outputs)
 
-        return outputs
+        return emb, outputs
 
 
 class PostNet(nn.Module):

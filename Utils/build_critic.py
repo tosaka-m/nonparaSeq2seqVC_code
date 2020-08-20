@@ -29,13 +29,14 @@ class VCS2SLoss(nn.Module):
                  spk_enc_w=1.,
                  spk_clf_w=0.1,
                  spk_adv_w=20.,
+                 smoothing=0.1
     ):
         super(VCS2SLoss, self).__init__()
         self.masked_mse = MaskedMSELoss()
         self.masked_l1 = MaskedL1Loss()
         self.masked_bce = MaskedBCEWithLogitsLoss()
         self.masked_ce = MaskedCrossEntropyLoss()
-        self.ce = nn.CrossEntropyLoss(ignore_index=-1)
+        self.ce = LabelSmoothingLoss(classes=200, smoothing=0.1) #nn.CrossEntropyLoss(ignore_index=-1)
         self.contrastive = ContrastiveLoss()
 
         self.contra_w = contra_w
@@ -43,6 +44,8 @@ class VCS2SLoss(nn.Module):
         self.spk_enc_w = spk_enc_w
         self.spk_clf_w = spk_clf_w
         self.spk_adv_w = spk_adv_w
+        self.smoothing = 0.1
+        self.eos = 2
 
     def forward(self, output, text_input, text_input_lengths, mel_target, mel_target_lengths, speaker_ids):
         device = text_input.device
@@ -56,13 +59,13 @@ class VCS2SLoss(nn.Module):
         stop_label = torch.zeros(B, mel_mask.size(1)//2).to(device)
         stop_label.scatter_(1, (mel_target_lengths // 2 -1).unsqueeze(1), 1)
         stop_label.scatter_(1, ((mel_target_lengths-1) // 2).unsqueeze(1), 1)
+        stop_label = stop_label * (1 - 2 * self.smoothing) + self.smoothing
         stop_loss = self.masked_bce(output['predicted_stop'],
                                     stop_label, ~mel_mask.reshape(B, -1, 2)[:,:,0])
 
         # spk losses
         spk_logit = output['speaker_logit_from_mel']
         spk_enc_loss = self.ce(spk_logit, speaker_ids)
-
         spk_logit_hidden = output['speaker_logit_from_mel_hidden']
         spk_target_flatten = speaker_ids.unsqueeze(1).expand(-1, spk_logit_hidden.size(1)).reshape(-1)
         spk_logit_flatten = spk_logit_hidden.reshape(-1, spk_logit_hidden.size(2))
@@ -77,10 +80,13 @@ class VCS2SLoss(nn.Module):
             ~expand_mask)
 
         # text losses
-        text_logit = output['audio_seq2seq_logit'][:, :-1]
+        text_logit = output['audio_seq2seq_logit']
         text_logit_flatten = text_logit.reshape(-1, text_logit.size(2))
-        text_target_flatten = text_input.reshape(-1)
-        text_clf_loss = self.masked_ce(text_logit_flatten, text_target_flatten, ~text_mask.reshape(-1))
+        text_target = torch.cat([text_input, torch.zeros((text_input.size(0), 1)).type_as(text_input)], dim=1)
+        text_target.scatter_(1, text_input_lengths.unsqueeze(1), self.eos)
+        text_target_flatten = text_target.reshape(-1)
+        text_target_mask = self.get_mask_from_lengths(text_input_lengths+1)
+        text_clf_loss = self.masked_ce(text_logit_flatten, text_target_flatten, ~text_target_mask.reshape(-1))
 
         # contrastive loss
         text_hidden = output['text_hidden']
@@ -188,10 +194,11 @@ class MaskedBCEWithLogitsLoss(nn.Module):
 
 
 class MaskedCrossEntropyLoss(nn.Module):
-    def __init__(self, reduce='mean', **kwargs):
+    def __init__(self, reduce='mean', classes=200, smoothing=0.1, **kwargs):
         super(MaskedCrossEntropyLoss, self).__init__()
         self.reduce = reduce
-        self.ce = torch.nn.CrossEntropyLoss(reduction='none', **kwargs)
+        #self.ce = torch.nn.CrossEntropyLoss(reduction='none', **kwargs)
+        self.ce = LabelSmoothingLoss(classes, smoothing, reduce=None)
 
     def forward(self, x, y, mask):
         """
@@ -200,13 +207,34 @@ class MaskedCrossEntropyLoss(nn.Module):
         """
         mask = mask.type_as(x)
         ce_loss = self.ce(x, y)
-
         ce_loss *= (1-mask)
         ce_loss = ce_loss.sum() / (mask.sum())
         if self.reduce is not None:
             ce_loss =getattr(ce_loss, self.reduce)()
         return ce_loss
 
+class LabelSmoothingLoss(nn.Module):
+    def __init__(self, classes, smoothing=0.0, dim=-1, reduce='mean'):
+        super(LabelSmoothingLoss, self).__init__()
+        self.confidence = 1.0 - smoothing
+        self.smoothing = smoothing
+        self.cls = classes
+        self.dim = dim
+        self.reduce = reduce
+
+    def forward(self, pred, target):
+        pred = pred.log_softmax(dim=self.dim)
+        with torch.no_grad():
+            # true_dist = pred.data.clone()
+            true_dist = torch.zeros_like(pred)
+            true_dist.fill_(self.smoothing / (self.cls - 1))
+            true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
+
+        loss = torch.sum(-true_dist * pred, dim=self.dim)
+        if self.reduce is not None:
+            loss = getattr(loss, self.reduce)()
+
+        return loss
 
 class ContrastiveLoss(nn.Module):
     def __init__(self):
@@ -219,13 +247,14 @@ class ContrastiveLoss(nn.Module):
         x_mask = (B, Tx)
         y_mask = (B, Ty)
         """
-        norm_x = x / x.norm(dim=2, keepdim=True)
-        norm_y = y / y.norm(dim=2, keepdim=True)
+        norm_x = x / (1e-8 + x.norm(dim=2, keepdim=True))
+        norm_y = y / (1e-8 + y.norm(dim=2, keepdim=True))
         distance_matrix = 2 - 2 * torch.bmm(norm_x, norm_y.transpose(1, 2))
         contrast_mask = x_mask.unsqueeze(1) & y_mask.unsqueeze(2)
         hard_alignments = torch.eye(distance_matrix.size(1)).to(x.device)
         contrast_loss = hard_alignments * distance_matrix + (1 - hard_alignments) * torch.max(1 - distance_matrix, torch.zeros_like(distance_matrix))
         contrast_loss = (contrast_loss * contrast_mask).sum() / contrast_mask.sum()
+
         return contrast_loss
 
 class GuidedAttentionLoss(torch.nn.Module):

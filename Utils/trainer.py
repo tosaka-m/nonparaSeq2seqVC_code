@@ -155,6 +155,7 @@ class VCS2STrainer(Trainer):
                                 auto_encoding=(train_steps_per_epoch % 2 == 0))
 
             losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
+
             loss = 0
             for key, value in losses.items():
                 loss += value
@@ -182,9 +183,16 @@ class VCS2STrainer(Trainer):
                 eval_losses['eval/%s' % key].append(value.item())
 
             if eval_steps_per_epoch == 1:
-                eval_images["eval/image"].append(
-                    self.get_image(
-                        [output['post_output'][0].cpu().numpy(), mel_target[0].cpu().numpy()]))
+                eval_images["eval/post_output"].append(
+                    self.get_image([
+                        output['post_output'][0].cpu().numpy(),
+                        mel_target[0].cpu().numpy(),
+                    ]))
+                eval_images["eval/attns"].append(
+                    self.get_image([
+                        output['audio_seq2seq_alignments'][0].cpu().numpy().T,
+                        output['alignments'][0].cpu().numpy().T,
+                    ]))
 
         eval_losses = {key: np.mean(value) for key, value in eval_losses.items()}
         eval_losses.update(eval_images)
