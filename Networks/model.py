@@ -69,6 +69,10 @@ class VCS2S(nn.Module):
 
         return outputs
 
+    def speaker_classify(self, audio_seq2seq_hidden):
+        speaker_logit_from_mel_hidden = self.speaker_classifier(audio_seq2seq_hidden) # -> [B, text_len, n_speakers]
+        return {"speaker_logit_from_mel_hidden": speaker_logit_from_mel_hidden}
+
     def inference(self,
                   text_input=None, text_lengths=None,
                   mel_source=None, mel_source_lengths=None,

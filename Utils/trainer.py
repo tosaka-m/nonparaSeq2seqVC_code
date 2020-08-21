@@ -71,12 +71,12 @@ class Trainer(object):
             checkpoint_path (str): Checkpoint path to be saved.
         """
         state_dict = {
+            "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
-            "scheduler": self.scheduler.state_dict(),
+            #"scheduler": self.scheduler.state_dict(),
             "steps": self.steps,
             "epochs": self.epochs,
         }
-        state_dict["model"] = self.model.state_dict()
 
         if not os.path.exists(os.path.dirname(checkpoint_path)):
             os.makedirs(os.path.dirname(checkpoint_path))
@@ -144,7 +144,7 @@ class Trainer(object):
         return mask
 
     def _get_lr(self):
-        for param_group in self.optimizer.param_groups:
+        for param_group in self.optimizer.optimizers['main'].param_groups:
             lr = param_group['lr']
             break
         return lr
@@ -154,22 +154,29 @@ class VCS2STrainer(Trainer):
         train_losses = defaultdict(list)
         self.model.train()
         for train_steps_per_epoch, batch in enumerate(tqdm(self.train_dataloader, desc="[train]"), 1):
-            self.optimizer.zero_grad()
             batch = [b.to(self.device) for b in batch]
             text, text_lengths, mel_input, mel_target, mel_target_lengths, speaker_ids = batch
             output = self.model(text, text_lengths, mel_input, mel_target_lengths,
                                 auto_encoding=(train_steps_per_epoch % 2 == 0))
 
             losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
-
             loss = 0
             for key, value in losses.items():
                 loss += value
                 train_losses['train/%s' % key].append(value.item())
+            self.optimizer.zero_grad('main')
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5)
-            self.optimizer.step()
-            self.scheduler.step()
+            self.optimizer.step('main')
+
+            self.optimizer.zero_grad('speaker_clf')
+            output = self.model.speaker_classify(output['audio_seq2seq_hidden'].detach())
+            spk_clf_loss = self.critic['vcs2s'].speaker_clf_loss(output, text_lengths, speaker_ids)
+            train_losses['train/spk_clf_loss'].append(spk_clf_loss['spk_clf_loss'].item())
+            spk_clf_loss['spk_clf_loss'].backward()
+            torch.nn.utils.clip_grad_norm_(self.model.speaker_classifier.parameters(), max_norm=5)
+            self.optimizer.step('speaker_clf')
+            self.optimizer.scheduler()
 
         train_losses = {key: np.mean(value) for key, value in train_losses.items()}
         current_lr = self._get_lr()
@@ -188,6 +195,8 @@ class VCS2STrainer(Trainer):
                                 auto_encoding=(eval_steps_per_epoch % 2 == 0))
 
             losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
+            spk_clf_loss = self.critic['vcs2s'].speaker_clf_loss(output, text_lengths, speaker_ids)
+            losses.update(spk_clf_loss)
             loss = 0
             for key, value in losses.items():
                 loss += value

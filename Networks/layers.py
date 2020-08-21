@@ -253,8 +253,11 @@ class AudioSeq2seq(nn.Module):
             n_frames_per_step_encoder=n_frames_per_step_encoder,
             audio_encoder_hidden_dim=audio_encoder_hidden_dim
         )
+        self.encoded_to_n_symbol = LinearNorm(audio_encoder_hidden_dim, n_symbols)
         self.decoder_rnn_dim = audio_encoder_hidden_dim
-        self.attention_layer = Attention(self.decoder_rnn_dim, audio_encoder_hidden_dim,
+        self.attention_layer = Attention(
+            self.decoder_rnn_dim,
+            audio_encoder_hidden_dim,
             AE_attention_dim, AE_attention_location_n_filters,
             AE_attention_location_kernel_size)
 
