@@ -24,7 +24,7 @@ class VCS2S(nn.Module):
         self.unk = config.get('unk_token', 3)
         self.spemb_input = config.get('spemb_input', False)
 
-    def forward(self, text_input, text_lengths, mel_input, mel_lengths, auto_encoding=True):
+    def forward(self, text_input, text_lengths, mel_input, mel_lengths, text_to_speech=True):
         text_emb, text_hidden = self.text_encoder(text_input, text_lengths) # -> [B, max_text_len, hidden_dim]
         batch_size = text_input.size(0)
         start_embedding = torch.zeros(batch_size,).type_as(text_input).fill_(self.sos)
@@ -42,9 +42,9 @@ class VCS2S(nn.Module):
 
         audio_seq2seq_hidden, audio_seq2seq_logit, audio_seq2seq_alignments \
             = self.audio_seq2seq(audio_input, mel_lengths, text_emb.transpose(1, 2), start_embedding)
-        audio_seq2seq_hidden = audio_seq2seq_hidden[:,:-1, :] # -> [B, text_len, hidden_dim]
+        audio_seq2seq_hidden = audio_seq2seq_hidden[:, :-1, :] # -> [B, text_len, hidden_dim]
         speaker_logit_from_mel_hidden = self.speaker_classifier(audio_seq2seq_hidden) # -> [B, text_len, n_speakers]
-        if auto_encoding:
+        if text_to_speech:
             hidden = self.merge_net(text_hidden, text_lengths)
         else:
             hidden = self.merge_net(audio_seq2seq_hidden, text_lengths)

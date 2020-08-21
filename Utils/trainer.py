@@ -157,7 +157,7 @@ class VCS2STrainer(Trainer):
             batch = [b.to(self.device) for b in batch]
             text, text_lengths, mel_input, mel_target, mel_target_lengths, speaker_ids = batch
             output = self.model(text, text_lengths, mel_input, mel_target_lengths,
-                                auto_encoding=(train_steps_per_epoch % 2 == 0))
+                                text_to_speech=(train_steps_per_epoch % 2 == 0))
 
             losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
             loss = 0
@@ -192,7 +192,7 @@ class VCS2STrainer(Trainer):
             batch = [b.to(self.device) for b in batch]
             text, text_lengths, _, mel_target, mel_target_lengths, speaker_ids = batch
             output = self.model(text, text_lengths, mel_target, mel_target_lengths,
-                                auto_encoding=(eval_steps_per_epoch % 2 == 0))
+                                text_to_speech=(eval_steps_per_epoch % 2 == 0))
 
             losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
             spk_clf_loss = self.critic['vcs2s'].speaker_clf_loss(output, text_lengths, speaker_ids)
@@ -206,6 +206,11 @@ class VCS2STrainer(Trainer):
                 infered_data = self.model.inference(
                     mel_source=mel_target[:1],
                     mel_source_lengths=mel_target_lengths[:1],
+                    mel_reference=mel_target[-1:])
+
+                tts_infered_data = self.model.inference(
+                    text_input=text,
+                    text_lengths=text_lengths,
                     mel_reference=mel_target[-1:])
 
                 eval_images["eval/post_output"].append(
@@ -223,7 +228,10 @@ class VCS2STrainer(Trainer):
                         infered_data['post_output'][0].cpu().numpy(),
                         mel_target[0].cpu().numpy(),
                         mel_target[-1].cpu().numpy(),
-                        infered_data['alignment'][0].cpu().numpy()]))
+                        infered_data['alignment'][0].cpu().numpy().T,
+                        tts_infered_data['post_output'][0].cpu().numpy(),
+                        tts_infered_data['alignment'][0].cpu().numpy().T,
+                    ]))
 
         eval_losses = {key: np.mean(value) for key, value in eval_losses.items()}
         eval_losses.update(eval_images)
