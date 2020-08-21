@@ -28,7 +28,7 @@ class VCS2SLoss(nn.Module):
                  text_clf_w=2.,
                  spk_enc_w=1.,
                  spk_clf_w=0.1,
-                 spk_adv_w=20.,
+                 spk_adv_w=100.,
                  smoothing=0.1,
                  n_tokens=41,
                  n_speakers=200,
