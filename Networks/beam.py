@@ -8,7 +8,7 @@ from .penalties import PenaltyBuilder
 class Beam(object):
     """
     '''
-    adapt from opennmt 
+    adapt from opennmt
     https://github.com/OpenNMT/OpenNMT-py/blob/master/onmt/translate/beam.py
     '''
 
@@ -128,7 +128,6 @@ class Beam(object):
         flat_beam_scores = beam_scores.view(-1)
         best_scores, best_scores_id = flat_beam_scores.topk(self.size, 0,
                                                             True, True)
-
         self.all_scores.append(self.scores)
         self.scores = best_scores
 

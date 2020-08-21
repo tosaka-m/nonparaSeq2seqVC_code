@@ -24,7 +24,7 @@ class VCS2S(nn.Module):
         self.unk = config.get('unk_token', 3)
         self.spemb_input = config.get('spemb_input', False)
 
-    def forward(self, text_input, mel_input, text_lengths, mel_lengths, auto_encoding=True):
+    def forward(self, text_input, text_lengths, mel_input, mel_lengths, auto_encoding=True):
         text_emb, text_hidden = self.text_encoder(text_input, text_lengths) # -> [B, max_text_len, hidden_dim]
         batch_size = text_input.size(0)
         start_embedding = torch.zeros(batch_size,).type_as(text_input).fill_(self.sos)
@@ -90,7 +90,7 @@ class VCS2S(nn.Module):
             options = (text_hidden, )
         elif mel_reference is not None:
             #-> [B, text_len+1, hidden_dim] [B, text_len+1, n_symbols] [B, text_len+1, T/r]
-            start_embedding = torch.LongTensor([self.sos_token]).to(mel_reference.device)
+            start_embedding = torch.LongTensor([self.sos]).to(mel_reference.device)
             start_embedding = self.text_encoder.embedding(start_embedding) # [1, embedding_dim]
 
             if self.spemb_input:
@@ -99,10 +99,11 @@ class VCS2S(nn.Module):
                                          speaker_embedding.detach().unsqueeze(2).expand(-1, -1, time_length)], 1)
             else:
                 audio_input = mel_source
-                audio_seq2seq_hidden, audio_seq2seq_hids, audio_seq2seq_alignments \
-                    = self.audio_seq2seq.inference_beam(
-                        audio_input, start_embedding, self.text_encoder.embedding, beam_width=beam_width)
-                audio_seq2seq_hidden = audio_seq2seq_hidden[:,:-1, :] # -> [B, text_len, hidden_dim]
+
+            audio_seq2seq_hidden, audio_seq2seq_hids, audio_seq2seq_alignments \
+                = self.audio_seq2seq.inference_beam(
+                    audio_input, start_embedding, self.text_encoder.embedding, beam_width=beam_width)
+            audio_seq2seq_hidden = audio_seq2seq_hidden[:,:-1, :] # -> [B, text_len, hidden_dim]
             options = (audio_seq2seq_hidden, audio_seq2seq_hids, audio_seq2seq_alignments)
 
             hidden = self.merge_net.inference(audio_seq2seq_hidden)

@@ -232,7 +232,7 @@ class AudioSeq2seq(nn.Module):
 
     '''
     def __init__(self,
-                 n_symbols=35,
+                 n_symbols=41,
                  symbols_embedding_dim=512,
                  encoder_embedding_dim=512,
                  hidden_activation='tanh',
@@ -284,7 +284,8 @@ class AudioSeq2seq(nn.Module):
             assert False
 
         self.project_to_n_symbols= LinearNorm(encoder_embedding_dim,
-            n_symbols + 1) # plus the <eos>
+                                              n_symbols) # plus the <eos>
+        self.sos = 1
         self.eos = 2
         self.activation = hidden_activation
         self.max_len = 100
@@ -454,7 +455,7 @@ class AudioSeq2seq(nn.Module):
         decoder_input = tile(start_embedding, beam_width)
 
 
-        beam = Beam(beam_width, 0, self.eos, self.eos,
+        beam = Beam(beam_width, 0, self.sos, self.eos,
             n_best=n_best, cuda=True, global_scorer=GNMTGlobalScorer())
 
         hidden_outputs, alignments, phone_ids = [], [], []
@@ -490,7 +491,7 @@ class TextEncoder(nn.Module):
         - Bidirectional LSTM
     """
     def __init__(self,
-                 n_symbols=35,
+                 n_symbols=41,
                  symbols_embedding_dim=512,
                  encoder_n_convolutions=3,
                  encoder_embedding_dim=512,

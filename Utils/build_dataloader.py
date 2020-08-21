@@ -46,24 +46,55 @@ class FilePathDataset(torch.utils.data.Dataset):
             n_mels=n_mels
         )
         self.sr = sr
+        self.n_mels = 80
         self.mean, self.std = -4, 4
         #self.std_f0 = 5
         logger.debug('sr: %d\nn_fft: %d\nhop_length: %d\nwin_length: %d' % (sr, n_fft, hop_length, win_length))
 
         self.data_augmentation = data_augmentation and (not validation)
-        if data_augmentation:
-            self.extend_data_list = [d for d in self.data_list if len(d[1]) < 60]
-            self.mel_zero_pad = (torch.log(1e-4 + torch.zeros((n_mels, int(sr*0.6 // hop_length))).float()) - self.mean) / self.std
-            self.wave_zero_pad = torch.zeros((int(sr*0.6), )).float()
-            #self.f0_zero_pad = torch.zeros((self.mel_zero_pad.shape[1], )).float()
-            self.text_zero_pad = torch.LongTensor(self.text_cleaner(' '))
+        self.freq_masking = torchaudio.transforms.FrequencyMasking(freq_mask_param=10)
+        self.time_masking = torchaudio.transforms.TimeMasking(time_mask_param=20)
+
     def __len__(self):
         return len(self.data_list)
 
     def __getitem__(self, idx):
         data = self.data_list[idx]
         wave_tensor, mel_tensor, text_tensor, speaker_id = self._load_tensor(data)
-        return wave_tensor, mel_tensor, text_tensor,  speaker_id, data[0]
+        if self.data_augmentation:
+            mel_input, mel_tensor = self._data_augmentation(mel_tensor)
+        else:
+            mel_input = mel_tensor
+
+        return wave_tensor, mel_input, mel_tensor, text_tensor,  speaker_id, data[0]
+
+    def _data_augmentation(self, mel_tensor, p=0.5):
+        # common
+        if np.random.random() < p:
+            length_scale = np.random.uniform(0.925, 1.075)
+            mel_scale = np.random.uniform(0.975, 1.025)
+            n_mels = mel_tensor.size(0)
+            mel_tensor = torch.nn.functional.interpolate(
+                mel_tensor.unsqueeze(0).unsqueeze(1),
+                scale_factor=(mel_scale, length_scale), mode='bilinear',
+                align_corners=True,
+                recompute_scale_factor=True).squeeze(1).squeeze(0)
+            if mel_tensor.size(0) < n_mels:
+                mel_tensor =  torch.cat([
+                    mel_tensor,
+                    torch.zeros(n_mels-mel_tensor.size(0), mel_tensor.size(1)).type_as(mel_tensor)], dim=0)
+            elif mel_tensor.size(0) > n_mels:
+                mel_tensor = mel_tensor[:n_mels]
+            mel_tensor = mel_tensor[:, :mel_tensor.size(1) - mel_tensor.size(1) % 2]
+
+        # only input
+        mel_input = mel_tensor.clone()
+        if np.random.random() < p:
+            mel_input = self.freq_masking(mel_input)
+        if np.random.random() < p:
+            mel_input = self.time_masking(mel_input)
+
+        return mel_input, mel_tensor
 
     def _load_tensor(self, data):
         wave_path, text, speaker_id = data
@@ -115,19 +146,21 @@ class Collater(object):
 
         nmels = batch[0][1].size(0)
         max_mel_length = max([b[1].shape[1] for b in batch])
-        max_text_length = max([b[2].shape[0] for b in batch])
+        max_text_length = max([b[3].shape[0] for b in batch])
 
-        mels = torch.zeros((batch_size, nmels, max_mel_length)).float()
+        mel_targets = torch.zeros((batch_size, nmels, max_mel_length)).float()
+        mel_inputs = torch.zeros((batch_size, nmels, max_mel_length)).float()
         texts = torch.zeros((batch_size, max_text_length)).long()
         input_lengths = torch.zeros(batch_size).long()
         output_lengths = torch.zeros(batch_size).long()
         # f0s = torch.zeros((batch_size, max_mel_length)).float()
         speaker_ids = torch.zeros((batch_size)).long()
         paths = ['' for _ in range(batch_size)]
-        for bid, (_, mel, text, speaker_id, path) in enumerate(batch):
-            mel_size = mel.size(1)
+        for bid, (_, mel_input, mel_target, text, speaker_id, path) in enumerate(batch):
+            mel_size = mel_target.size(1)
             text_size = text.size(0)
-            mels[bid, :, :mel_size] = mel
+            mel_inputs[bid, :, :mel_size] = mel_input
+            mel_targets[bid, :, :mel_size] = mel_target
             texts[bid, :text_size] = text
             input_lengths[bid] = text_size
             output_lengths[bid] = mel_size
@@ -137,9 +170,9 @@ class Collater(object):
 
         if self.return_wave:
             waves = [b[0] for b in batch]
-            return texts, input_lengths, mels, output_lengths, speaker_ids, waves
+            return texts, input_lengths, mel_inputs, mel_targets, output_lengths, speaker_ids, waves
 
-        return texts, input_lengths, mels, output_lengths, speaker_ids
+        return texts, input_lengths, mel_inputs, mel_targets, output_lengths, speaker_ids
 
 def build_dataloader(path_list,
                      validation=False,

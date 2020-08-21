@@ -143,6 +143,12 @@ class Trainer(object):
         mask = torch.gt(mask+1, lengths.unsqueeze(1))
         return mask
 
+    def _get_lr(self):
+        for param_group in self.optimizer.param_groups:
+            lr = param_group['lr']
+            break
+        return lr
+
 class VCS2STrainer(Trainer):
     def _train_epoch(self):
         train_losses = defaultdict(list)
@@ -150,8 +156,8 @@ class VCS2STrainer(Trainer):
         for train_steps_per_epoch, batch in enumerate(tqdm(self.train_dataloader, desc="[train]"), 1):
             self.optimizer.zero_grad()
             batch = [b.to(self.device) for b in batch]
-            text, text_lengths, mel_target, mel_target_lengths, speaker_ids = batch
-            output = self.model(text, mel_target, text_lengths, mel_target_lengths,
+            text, text_lengths, mel_input, mel_target, mel_target_lengths, speaker_ids = batch
+            output = self.model(text, text_lengths, mel_input, mel_target_lengths,
                                 auto_encoding=(train_steps_per_epoch % 2 == 0))
 
             losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
@@ -161,8 +167,12 @@ class VCS2STrainer(Trainer):
                 loss += value
                 train_losses['train/%s' % key].append(value.item())
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5)
             self.optimizer.step()
+
         train_losses = {key: np.mean(value) for key, value in train_losses.items()}
+        current_lr = self._get_lr()
+        train_losses['train/learning_rate'] = current_lr
         return train_losses
 
     @torch.no_grad()
@@ -172,8 +182,8 @@ class VCS2STrainer(Trainer):
         eval_images = defaultdict(list)
         for eval_steps_per_epoch, batch in enumerate(tqdm(self.val_dataloader, desc="[eval]"), 1):
             batch = [b.to(self.device) for b in batch]
-            text, text_lengths, mel_target, mel_target_lengths, speaker_ids = batch
-            output = self.model(text, mel_target, text_lengths, mel_target_lengths,
+            text, text_lengths, _, mel_target, mel_target_lengths, speaker_ids = batch
+            output = self.model(text, text_lengths, mel_target, mel_target_lengths,
                                 auto_encoding=(eval_steps_per_epoch % 2 == 0))
 
             losses = self.critic['vcs2s'](output, text, text_lengths, mel_target, mel_target_lengths, speaker_ids)
@@ -183,6 +193,11 @@ class VCS2STrainer(Trainer):
                 eval_losses['eval/%s' % key].append(value.item())
 
             if eval_steps_per_epoch == 1:
+                infered_data = self.model.inference(
+                    mel_source=mel_target[:1],
+                    mel_source_lengths=mel_target_lengths[:1],
+                    mel_reference=mel_target[-1:])
+
                 eval_images["eval/post_output"].append(
                     self.get_image([
                         output['post_output'][0].cpu().numpy(),
@@ -190,9 +205,15 @@ class VCS2STrainer(Trainer):
                     ]))
                 eval_images["eval/attns"].append(
                     self.get_image([
-                        output['audio_seq2seq_alignments'][0].cpu().numpy().T,
+                        output['audio_seq2seq_alignments'][0].cpu().numpy(),
                         output['alignments'][0].cpu().numpy().T,
                     ]))
+                eval_images["eval/inference"].append(
+                    self.get_image([
+                        infered_data['post_output'][0].cpu().numpy(),
+                        mel_target[0].cpu().numpy(),
+                        mel_target[-1].cpu().numpy(),
+                        infered_data['alignment'][0].cpu().numpy()]))
 
         eval_losses = {key: np.mean(value) for key, value in eval_losses.items()}
         eval_losses.update(eval_images)

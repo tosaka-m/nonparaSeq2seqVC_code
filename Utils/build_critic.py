@@ -25,18 +25,20 @@ def build_critic(critic_params={}):
 class VCS2SLoss(nn.Module):
     def __init__(self,
                  contra_w=30.,
-                 text_clf_w=1.,
+                 text_clf_w=2.,
                  spk_enc_w=1.,
                  spk_clf_w=0.1,
                  spk_adv_w=20.,
-                 smoothing=0.1
+                 smoothing=0.1,
+                 n_tokens=41,
+                 n_speakers=200,
     ):
         super(VCS2SLoss, self).__init__()
         self.masked_mse = MaskedMSELoss()
         self.masked_l1 = MaskedL1Loss()
         self.masked_bce = MaskedBCEWithLogitsLoss()
-        self.masked_ce = MaskedCrossEntropyLoss()
-        self.ce = LabelSmoothingLoss(classes=200, smoothing=0.1) #nn.CrossEntropyLoss(ignore_index=-1)
+        self.masked_ce = MaskedCrossEntropyLoss(classes=n_tokens)
+        self.ce = LabelSmoothingLoss(classes=n_speakers, smoothing=0.1) #nn.CrossEntropyLoss(ignore_index=-1)
         self.contrastive = ContrastiveLoss()
 
         self.contra_w = contra_w
@@ -48,6 +50,10 @@ class VCS2SLoss(nn.Module):
         self.eos = 2
 
     def forward(self, output, text_input, text_input_lengths, mel_target, mel_target_lengths, speaker_ids):
+        """
+        output:
+        text_input:
+        """
         device = text_input.device
         text_mask = self.get_mask_from_lengths(text_input_lengths)
         mel_mask = self.get_mask_from_lengths(mel_target_lengths)
