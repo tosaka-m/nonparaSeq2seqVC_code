@@ -40,8 +40,8 @@ class VCS2S(nn.Module):
         else:
             audio_input = mel_input
 
-        audio_seq2seq_hidden, audio_seq2seq_logit, audio_seq2seq_alignments = self.audio_seq2seq(
-                audio_input, mel_lengths, text_emb.transpose(1, 2), start_embedding)
+        audio_seq2seq_hidden, audio_seq2seq_logit, audio_seq2seq_alignments \
+            = self.audio_seq2seq(audio_input, mel_lengths, text_emb.transpose(1, 2), start_embedding)
         audio_seq2seq_hidden = audio_seq2seq_hidden[:,:-1, :] # -> [B, text_len, hidden_dim]
         speaker_logit_from_mel_hidden = self.speaker_classifier(audio_seq2seq_hidden) # -> [B, text_len, n_speakers]
         if auto_encoding:

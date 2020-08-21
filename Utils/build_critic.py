@@ -72,11 +72,8 @@ class VCS2SLoss(nn.Module):
         # spk losses
         spk_logit = output['speaker_logit_from_mel']
         spk_enc_loss = self.ce(spk_logit, speaker_ids)
-        spk_logit_hidden = output['speaker_logit_from_mel_hidden']
-        spk_target_flatten = speaker_ids.unsqueeze(1).expand(-1, spk_logit_hidden.size(1)).reshape(-1)
-        spk_logit_flatten = spk_logit_hidden.reshape(-1, spk_logit_hidden.size(2))
-        spk_clf_loss = self.ce(spk_logit_flatten, spk_target_flatten)
 
+        spk_logit_hidden = output['speaker_logit_from_mel_hidden']
         n_spk = spk_logit.size(1)
         expand_mask =  text_mask.unsqueeze(1).expand(-1, n_spk, -1)
         uniform_target = (1/n_spk) * torch.ones_like(spk_logit_hidden)
@@ -104,11 +101,18 @@ class VCS2SLoss(nn.Module):
             "recon_post_loss": recon_post_loss,
             "stop_loss": stop_loss,
             "spk_enc_loss": spk_enc_loss * self.spk_enc_w,
-            "spk_clf_loss": spk_clf_loss * self.spk_clf_w,
             "spk_adv_loss": spk_adv_loss * self.spk_adv_w,
             "text_clf_loss": text_clf_loss * self.text_clf_w,
             "contra_loss": contra_loss * self.contra_w
         }
+
+    def speaker_clf_loss(self, output, text_input_lengths, speaker_ids):
+        text_mask = self.get_mask_from_lengths(text_input_lengths)
+        spk_logit_hidden = output['speaker_logit_from_mel_hidden']
+        spk_target_flatten = speaker_ids.unsqueeze(1).expand(-1, spk_logit_hidden.size(1)).reshape(-1)
+        spk_logit_flatten = spk_logit_hidden.reshape(-1, spk_logit_hidden.size(2))
+        spk_clf_loss = self.masked_ce(spk_logit_flatten, spk_target_flatten, ~text_mask.reshape(-1))
+        return { "spk_clf_loss": spk_clf_loss * self.spk_clf_w }
 
     def get_mask_from_lengths(self, lengths, max_len=None):
         if max_len is None:

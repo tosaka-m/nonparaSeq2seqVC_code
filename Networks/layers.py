@@ -253,13 +253,12 @@ class AudioSeq2seq(nn.Module):
             n_frames_per_step_encoder=n_frames_per_step_encoder,
             audio_encoder_hidden_dim=audio_encoder_hidden_dim
         )
-
         self.decoder_rnn_dim = audio_encoder_hidden_dim
         self.attention_layer = Attention(self.decoder_rnn_dim, audio_encoder_hidden_dim,
             AE_attention_dim, AE_attention_location_n_filters,
             AE_attention_location_kernel_size)
 
-        self.decoder_rnn =  nn.LSTMCell(symbols_embedding_dim + audio_encoder_hidden_dim,
+        self.decoder_rnn = nn.LSTMCell(symbols_embedding_dim + audio_encoder_hidden_dim,
             self.decoder_rnn_dim)
 
         def _proj(activation):
@@ -283,8 +282,7 @@ class AudioSeq2seq(nn.Module):
             print('Must be relu, tanh or linear.')
             assert False
 
-        self.project_to_n_symbols= LinearNorm(encoder_embedding_dim,
-                                              n_symbols) # plus the <eos>
+        self.project_to_n_symbols = LinearNorm(encoder_embedding_dim, n_symbols)
         self.sos = 1
         self.eos = 2
         self.activation = hidden_activation

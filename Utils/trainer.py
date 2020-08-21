@@ -169,6 +169,7 @@ class VCS2STrainer(Trainer):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5)
             self.optimizer.step()
+            self.scheduler.step()
 
         train_losses = {key: np.mean(value) for key, value in train_losses.items()}
         current_lr = self._get_lr()
